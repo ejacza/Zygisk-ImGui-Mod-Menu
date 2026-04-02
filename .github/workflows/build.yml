@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_package:
+        description: 'Target package name (e.g. com.tencent.ig)'
+        required: true
+        default: 'com.tencent.ig'
+      module_version:
+        description: 'Module version (e.g. v1.1.0)'
+        required: true
+        default: 'v1.1.0'
+      module_version_code:
+        description: 'Module version code (e.g. 110)'
+        required: true
+        default: '110'
+      create_release:
+        description: 'Create GitHub Release?'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch TARGET_PACKAGE in Main.cpp
+        run: |
+          sed -i "s|#define TARGET_PACKAGE std::string(\".*\")|#define TARGET_PACKAGE std::string(\"${{ github.event.inputs.target_package }}\")|" \
+            module/src/main/cpp/Main.cpp
+          grep "TARGET_PACKAGE" module/src/main/cpp/Main.cpp
+
+      - name: Patch module.gradle
+        run: |
+          sed -i "s|moduleVersion = \".*\"|moduleVersion = \"${{ github.event.inputs.module_version }}\"|" module.gradle
+          sed -i "s|moduleVersionCode = [0-9]*|moduleVersionCode = ${{ github.event.inputs.module_version_code }}|" module.gradle
+          sed -i "s|moduleDescription = \".*\"|moduleDescription = \"Target: ${{ github.event.inputs.target_package }}\"|" module.gradle
+          cat module.gradle
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: echo "y" | sdkmanager "ndk;27.0.12077973"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release
+        run: ./gradlew zipRelease
+
+      - name: Get zip info
+        id: zip
+        run: |
+          ZIP=$(ls out/*.zip | head -1)
+          echo "path=$ZIP" >> $GITHUB_OUTPUT
+          echo "name=$(basename $ZIP)" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: ${{ steps.zip.outputs.path }}
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.module_version }}
+          name: ${{ github.event.inputs.module_version }}
+          body: |
+            **Target Package:** `${{ github.event.inputs.target_package }}`
+            **Version:** `${{ github.event.inputs.module_version }}`
+          files: ${{ steps.zip.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
